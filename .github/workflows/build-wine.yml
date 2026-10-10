@@ -1,0 +1,46 @@
+name: Build Wine for Tally (macOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_ref:
+        description: Wine tag or branch (from gitlab.winehq.org/wine/wine)
+        default: wine-11.19
+        required: true
+
+jobs:
+  build:
+    # Apple Silicon runner. The build itself is x86_64 and runs under Rosetta.
+    runs-on: macos-15
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rosetta
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Install build tools
+        run: brew install bison mingw-w64
+
+      - name: Build and package
+        env:
+          WINE_REF: ${{ inputs.wine_ref }}
+          SKIP_SMOKE: 1
+        run: ./build-wine.sh
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-tally-${{ inputs.wine_ref }}-macos-x86_64
+          path: dist/wine-tally.tar.gz
+          if-no-files-found: error
+
+      # Runs after the upload, so a failed test still leaves the package.
+      - name: Smoke test
+        run: |
+          tar -xzf dist/wine-tally.tar.gz -C "$RUNNER_TEMP"
+          export WINEPREFIX="$RUNNER_TEMP/prefix"
+          "$RUNNER_TEMP/wine-tally/run-wine" cmd /c ver 2>&1 | tee smoke.log
+          grep -q "Microsoft Windows" smoke.log
+          ! grep -qi freetype smoke.log
+          test -n "$(ls "$WINEPREFIX/drive_c/windows/syswow64")"
